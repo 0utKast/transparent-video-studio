@@ -1,0 +1,32 @@
+{
+  "name": "transparent-video-studio",
+  "version": "1.0.0",
+  "description": "Chrome Extension for In-Browser Video Background Removal, Real-Time Alpha Matting, WebGPU Despill Shaders & Transparent WebM VP9 Export",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "generate-icons": "node scripts/generate-icons.js"
+  },
+  "keywords": [
+    "chrome-extension",
+    "video-matting",
+    "background-removal",
+    "transparent-video",
+    "webgpu",
+    "wgsl",
+    "webm-alpha",
+    "prores-4444",
+    "despill",
+    "manifest-v3"
+  ],
+  "author": "Antigravity",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/chrome": "^0.0.280",
+    "@types/node": "^22.5.0",
+    "@webgpu/types": "^0.1.44",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.2"
+  }
+}

@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TransparentVideo Studio — WebGPU Video Matting & Alpha Engine</title>
+  <script type="module" crossorigin src="../assets/studio-BN6MHcJn.js"></script>
+  <link rel="modulepreload" crossorigin href="../assets/export-manager-DSFGg9SB.js">
+  <link rel="stylesheet" crossorigin href="../assets/studio-DHDQA1Tg.css">
+</head>
+<body class="studio-body">
+  <!-- Top Navigation Bar -->
+  <header class="studio-header">
+    <div class="header-brand">
+      <div class="brand-logo">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+          <circle cx="12" cy="7" r="4"></circle>
+          <path d="M5.5 21v-2a6.5 6.5 0 0 1 13 0v2"></path>
+          <path d="M19 11l3-3m0 0l-3-3m3 3H15"></path>
+        </svg>
+      </div>
+      <div>
+        <h1 class="brand-title">TransparentVideo Studio</h1>
+        <p class="brand-subtitle">Eliminación de Fondo en Tiempo Real & Canal Alfa WebGPU</p>
+      </div>
+    </div>
+
+    <div class="header-status">
+      <div class="status-pill" id="gpu-status-pill">
+        <span class="status-dot online"></span>
+        <span id="gpu-adapter-name">Inicializando WebGPU...</span>
+      </div>
+      <button class="btn btn-secondary btn-sm" id="btn-toggle-smurf" title="Muestra el problema de canales BGR de OpenCV en desktop">
+        🫐 Simular Efecto Pitufo
+      </button>
+      <button class="btn btn-secondary btn-sm" id="btn-snapshot">
+        📸 Capturar PNG
+      </button>
+      <button class="btn btn-primary btn-sm" id="btn-record-toggle">
+        <span class="rec-dot"></span>
+        <span id="rec-label">Grabar WebM Alfa</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Workstation Layout -->
+  <main class="studio-workspace">
+    <!-- Left: Video Viewport & Source Controls -->
+    <section class="viewport-section">
+      <div class="viewport-container" id="viewport-container">
+        <!-- Render Canvas for WebGPU/Canvas2D -->
+        <canvas id="render-canvas" width="1280" height="720"></canvas>
+        
+        <!-- Interactive Split Slider Divider Line -->
+        <div class="split-divider" id="split-divider" style="display: none;">
+          <div class="split-handle">↔</div>
+        </div>
+
+        <div class="viewport-controls">
+          <button class="icon-btn" id="btn-play-pause" title="Reproducir / Pausar">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+              <polygon points="6 4 18 12 6 20 6 4"></polygon>
+            </svg>
+          </button>
+          <span class="viewport-time-badge" id="viewport-timer">00:00:00</span>
+          <div class="spacer"></div>
+          <button class="icon-btn" id="btn-toggle-split" title="Comparativa A/B (Original vs Transparente)">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="12" y1="3" x2="12" y2="21"></line>
+              <rect x="3" y="5" width="18" height="14" rx="2"></rect>
+            </svg>
+          </button>
+          <button class="icon-btn" id="btn-fullscreen" title="Pantalla Completa">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- Live Telemetry HUD Bar -->
+      <div class="telemetry-bar" id="telemetry-container"></div>
+
+      <!-- Video Source Selectors -->
+      <div class="source-bar">
+        <span class="source-bar-title">Fuente de Entrada:</span>
+        <button class="btn btn-outline active" data-source="demo">
+          ⚡ Presentador Demo 60FPS
+        </button>
+        <button class="btn btn-outline" data-source="webcam">
+          📷 Cámara Web HD
+        </button>
+        <button class="btn btn-outline" data-source="file">
+          📁 Subir Vídeo MP4/MOV
+        </button>
+        <button class="btn btn-outline" data-source="screen">
+          🖥️ Capturar Pantalla / Pestaña
+        </button>
+        <input type="file" id="file-picker" accept="video/mp4,video/webm,video/ogg,video/quicktime" style="display: none;">
+      </div>
+    </section>
+
+    <!-- Right: Filters, Tuning & Background Controls -->
+    <aside class="control-panel">
+      <!-- Background Replacement Mode -->
+      <div class="panel-card">
+        <div class="card-header">
+          <h3>Fondo de Salida</h3>
+          <span class="badge-tech">ALPHA CHANNEL</span>
+        </div>
+        <div class="bg-mode-buttons">
+          <button class="bg-btn active" data-bg="transparent">
+            🏁 Damero Alfa
+          </button>
+          <button class="bg-btn" data-bg="green">
+            🟩 Croma Verde
+          </button>
+          <button class="bg-btn" data-bg="cyberpunk">
+            🌆 Estudio Virtual
+          </button>
+          <button class="bg-btn" data-bg="office">
+            🏢 Oficina Bokeh
+          </button>
+        </div>
+      </div>
+
+      <!-- Matting Mode Selector -->
+      <div class="panel-card">
+        <div class="card-header">
+          <h3>Modo de Extracción</h3>
+        </div>
+        <div class="matting-mode-buttons">
+          <button class="mode-btn active" data-mode="chroma-green">
+            Verde (Green Screen)
+          </button>
+          <button class="mode-btn" data-mode="chroma-blue">
+            Azul (Blue Screen)
+          </button>
+          <button class="mode-btn" data-mode="chroma-custom">
+            Color Personalizado
+          </button>
+          <button class="mode-btn" data-mode="luma">
+            Luma (Brillo)
+          </button>
+        </div>
+        <div class="color-picker-row" id="color-picker-row" style="display: none; margin-top: 10px;">
+          <label>Tono a extraer:</label>
+          <input type="color" id="key-color-input" value="#00ff00">
+        </div>
+      </div>
+
+      <!-- Edge Tuning Sliders -->
+      <div class="panel-card">
+        <div class="card-header">
+          <h3>Perfeccionamiento de Borde</h3>
+          <span class="badge-tech">WGSL DESPILL</span>
+        </div>
+
+        <div class="slider-group">
+          <div class="slider-label">
+            <span>Umbral de Corte (Threshold)</span>
+            <span id="val-threshold">35%</span>
+          </div>
+          <input type="range" id="slider-threshold" min="0" max="100" value="35">
+        </div>
+
+        <div class="slider-group">
+          <div class="slider-label">
+            <span>Suavizado (Feather)</span>
+            <span id="val-feather">15%</span>
+          </div>
+          <input type="range" id="slider-feather" min="0" max="100" value="15">
+        </div>
+
+        <div class="slider-group">
+          <div class="slider-label">
+            <span>Filtro Despill (Anti-Halos)</span>
+            <span id="val-despill">75%</span>
+          </div>
+          <input type="range" id="slider-despill" min="0" max="100" value="75">
+        </div>
+
+        <div class="slider-group">
+          <div class="slider-label">
+            <span>Contracción / Expansión (Choke)</span>
+            <span id="val-choke">0%</span>
+          </div>
+          <input type="range" id="slider-choke" min="-100" max="100" value="0">
+        </div>
+
+        <div class="checkbox-row" style="margin-top: 12px;">
+          <label class="custom-checkbox">
+            <input type="checkbox" id="check-invert">
+            <span>Invertir Máscara (Conservar fondo)</span>
+          </label>
+        </div>
+      </div>
+
+      <!-- ProRes 4444 & Final Cut / DaVinci Guide -->
+      <div class="panel-card info-card">
+        <div class="card-header">
+          <h3>🎬 Flujo de Trabajo ProRes 4444</h3>
+        </div>
+        <p class="card-text">
+          Al pulsar <strong>"Grabar WebM Alfa"</strong>, se genera un archivo de vídeo que preserva el canal alfa nativo. Para integrarlo en <strong>Final Cut Pro</strong> o <strong>DaVinci Resolve</strong> como Apple ProRes 4444 (.mov transparente):
+        </p>
+        <pre class="code-box">ffmpeg -i video_transparente.webm -c:v prores_ks -profile:v 4444 -pix_fmt yuva444p10le salida.mov</pre>
+      </div>
+    </aside>
+  </main>
+
+</body>
+</html>
