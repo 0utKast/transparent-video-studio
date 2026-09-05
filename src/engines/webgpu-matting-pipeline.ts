@@ -12,6 +12,7 @@ export class WebGPUMattingPipeline {
   private isSupported = false;
   private adapterInfo = 'Inicializando...';
   private targetCanvas: HTMLCanvasElement;
+  private canvasFormat: GPUTextureFormat = 'bgra8unorm';
 
   constructor(canvas: HTMLCanvasElement) {
     this.targetCanvas = canvas;
@@ -33,7 +34,6 @@ export class WebGPUMattingPipeline {
         return false;
       }
 
-      // Safe retrieval of adapter info in modern Chrome
       const info = (this.adapter as any).info || {};
       this.adapterInfo = `${info.vendor || 'GPU'} ${info.architecture || ''} (${info.description || 'Hardware'})`;
 
@@ -49,10 +49,10 @@ export class WebGPUMattingPipeline {
         return false;
       }
 
-      const canvasFormat = navigator.gpu.getPreferredCanvasFormat();
+      this.canvasFormat = navigator.gpu.getPreferredCanvasFormat();
       this.context.configure({
         device: this.device,
-        format: canvasFormat,
+        format: this.canvasFormat,
         alphaMode: 'opaque',
       });
 
@@ -62,7 +62,6 @@ export class WebGPUMattingPipeline {
         code: MATTING_SHADER_WGSL,
       });
 
-      // Check compilation info
       const compInfo = await shaderModule.getCompilationInfo();
       const errors = compInfo.messages.filter((m) => m.type === 'error');
       if (errors.length > 0) {
@@ -72,7 +71,6 @@ export class WebGPUMattingPipeline {
         return false;
       }
 
-      // Pipeline layout & pipeline
       this.pipeline = this.device.createRenderPipeline({
         label: 'Matting Pipeline',
         layout: 'auto',
@@ -85,7 +83,7 @@ export class WebGPUMattingPipeline {
           entryPoint: 'fs_main',
           targets: [
             {
-              format: canvasFormat,
+              format: this.canvasFormat,
             },
           ],
         },
@@ -94,7 +92,6 @@ export class WebGPUMattingPipeline {
         },
       });
 
-      // Sampler with clamp to edge
       this.sampler = this.device.createSampler({
         magFilter: 'linear',
         minFilter: 'linear',
@@ -102,7 +99,6 @@ export class WebGPUMattingPipeline {
         addressModeV: 'clamp-to-edge',
       });
 
-      // Uniform buffer (64 bytes = 4 vec4s)
       this.uniformBuffer = this.device.createBuffer({
         size: 64,
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
@@ -138,14 +134,43 @@ export class WebGPUMattingPipeline {
       return;
     }
 
-    const width = this.targetCanvas.width > 0 ? this.targetCanvas.width : 1280;
-    const height = this.targetCanvas.height > 0 ? this.targetCanvas.height : 720;
+    // 1. Dynamic Resolution Extraction (Fixes 4K 3840x2160 Cropping Bug!)
+    let srcWidth = 1280;
+    let srcHeight = 720;
+    if (source instanceof HTMLVideoElement) {
+      srcWidth = source.videoWidth || 1280;
+      srcHeight = source.videoHeight || 720;
+    } else if (source instanceof HTMLCanvasElement || source instanceof ImageBitmap) {
+      srcWidth = source.width || 1280;
+      srcHeight = source.height || 720;
+    }
 
-    // 1. Create or update video texture
-    if (!this.videoTexture || this.videoTexture.width !== width || this.videoTexture.height !== height) {
+    if (srcWidth <= 0 || srcHeight <= 0) return;
+
+    // Safety clamp to GPU max texture dimension (e.g. 8192)
+    const maxDim = this.adapter?.limits.maxTextureDimension2D || 8192;
+    if (srcWidth > maxDim || srcHeight > maxDim) {
+      const scale = Math.min(maxDim / srcWidth, maxDim / srcHeight);
+      srcWidth = Math.round(srcWidth * scale);
+      srcHeight = Math.round(srcHeight * scale);
+    }
+
+    // Resize target canvas if video resolution changed
+    if (this.targetCanvas.width !== srcWidth || this.targetCanvas.height !== srcHeight) {
+      this.targetCanvas.width = srcWidth;
+      this.targetCanvas.height = srcHeight;
+      this.context.configure({
+        device: this.device,
+        format: this.canvasFormat,
+        alphaMode: 'opaque',
+      });
+    }
+
+    // 2. Create or recreate video texture matching the full frame
+    if (!this.videoTexture || this.videoTexture.width !== srcWidth || this.videoTexture.height !== srcHeight) {
       if (this.videoTexture) this.videoTexture.destroy();
       this.videoTexture = this.device.createTexture({
-        size: [width, height, 1],
+        size: [srcWidth, srcHeight, 1],
         format: 'rgba8unorm',
         usage:
           GPUTextureUsage.TEXTURE_BINDING |
@@ -154,18 +179,18 @@ export class WebGPUMattingPipeline {
       });
     }
 
-    // Copy source frame to WebGPU texture (RGBA format strictly guaranteed)
+    // Copy entire full-resolution frame into texture
     try {
       this.device.queue.copyExternalImageToTexture(
         { source },
         { texture: this.videoTexture },
-        [width, height]
+        [srcWidth, srcHeight]
       );
     } catch (e) {
       return;
     }
 
-    // 2. Map matting & background mode to integers
+    // 3. Map matting & background mode
     let modeCode = 0;
     if (mattingMode === 'chroma-green') modeCode = 0;
     else if (mattingMode === 'chroma-blue') modeCode = 1;
@@ -181,7 +206,7 @@ export class WebGPUMattingPipeline {
     else if (backgroundMode === 'office') bgCode = 3;
     else bgCode = 4;
 
-    // 3. Write uniform buffer (4 vec4s = 16 floats/uints)
+    // 4. Uniforms buffer (4 vec4s)
     const uniformArray = new ArrayBuffer(64);
     const floatView = new Float32Array(uniformArray);
     const uintView = new Uint32Array(uniformArray);
@@ -207,12 +232,12 @@ export class WebGPUMattingPipeline {
     // vec4 3: misc (time, splitPosition, resolution.x, resolution.y)
     floatView[12] = time;
     floatView[13] = splitPosition;
-    floatView[14] = width;
-    floatView[15] = height;
+    floatView[14] = srcWidth;
+    floatView[15] = srcHeight;
 
     this.device.queue.writeBuffer(this.uniformBuffer, 0, uniformArray);
 
-    // 4. Bind group
+    // 5. Bind group
     const bindGroup = this.device.createBindGroup({
       layout: this.pipeline.getBindGroupLayout(0),
       entries: [
@@ -222,7 +247,7 @@ export class WebGPUMattingPipeline {
       ],
     });
 
-    // 5. Render pass
+    // 6. Render pass
     const commandEncoder = this.device.createCommandEncoder();
     const currentTexture = this.context.getCurrentTexture();
     const renderPass = commandEncoder.beginRenderPass({
@@ -238,7 +263,7 @@ export class WebGPUMattingPipeline {
 
     renderPass.setPipeline(this.pipeline);
     renderPass.setBindGroup(0, bindGroup);
-    renderPass.draw(6); // 2 triangles = 6 vertices
+    renderPass.draw(6);
     renderPass.end();
 
     this.device.queue.submit([commandEncoder.finish()]);

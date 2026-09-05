@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>TransparentVideo Studio — WebGPU Video Matting & Alpha Engine</title>
-  <script type="module" crossorigin src="../assets/studio-sCYhnAxP.js"></script>
-  <link rel="modulepreload" crossorigin href="../assets/export-manager-BpGeN5yQ.js">
-  <link rel="stylesheet" crossorigin href="../assets/studio-DHDQA1Tg.css">
+  <title>TransparentVideo Studio — Eliminador de Fondo de Vídeo en Tiempo Real</title>
+  <script type="module" crossorigin src="../assets/studio-B62JjvES.js"></script>
+  <link rel="modulepreload" crossorigin href="../assets/export-manager-BbM40fc4.js">
+  <link rel="stylesheet" crossorigin href="../assets/studio-BkuEJ2OE.css">
 </head>
 <body class="studio-body">
   <!-- Top Navigation Bar -->
@@ -21,191 +21,252 @@
       </div>
       <div>
         <h1 class="brand-title">TransparentVideo Studio</h1>
-        <p class="brand-subtitle">Eliminación de Fondo en Tiempo Real & Canal Alfa WebGPU</p>
+        <p class="brand-subtitle">Eliminación de Fondo de Vídeo & Canal Alfa WebGPU (BrowserOS)</p>
       </div>
     </div>
 
-    <div class="header-status">
+    <div class="header-actions">
       <div class="status-pill" id="gpu-status-pill">
         <span class="status-dot online"></span>
-        <span id="gpu-adapter-name">Inicializando WebGPU...</span>
+        <span id="gpu-adapter-name">WebGPU Activo</span>
       </div>
-      <button class="btn btn-secondary btn-sm" id="btn-toggle-smurf" title="Muestra el problema de canales BGR de OpenCV en desktop">
-        🫐 Simular Efecto Pitufo
+      <button class="btn btn-secondary btn-sm" id="btn-toggle-smurf" title="Muestra el problema histórico de canales BGR de OpenCV en aplicaciones de escritorio">
+        🫐 Probar Efecto Pitufo (Demo BGR)
       </button>
       <button class="btn btn-secondary btn-sm" id="btn-snapshot">
-        📸 Capturar PNG
+        📸 Foto PNG Transparente
       </button>
       <button class="btn btn-primary btn-sm" id="btn-record-toggle">
         <span class="rec-dot"></span>
-        <span id="rec-label">Grabar WebM Alfa</span>
+        <span id="rec-label">Grabar Vídeo Transparente</span>
       </button>
     </div>
   </header>
 
   <!-- Main Workstation Layout -->
   <main class="studio-workspace">
-    <!-- Left: Video Viewport & Source Controls -->
+    <!-- Left: Video Viewport & Player Controls -->
     <section class="viewport-section">
+      <!-- Helper Banner -->
+      <div class="helper-banner" id="helper-banner">
+        💡 <strong>Cómo hacer transparente el vídeo:</strong> Pulsa en <strong>"🪄 Cuentagotas"</strong> y haz clic en cualquier punto del fondo de tu vídeo para borrarlo al instante.
+      </div>
+
+      <!-- Video Container with Full 4K Support -->
       <div class="viewport-container" id="viewport-container">
-        <!-- Render Canvas for WebGPU/Canvas2D -->
         <canvas id="render-canvas" width="1280" height="720"></canvas>
         
-        <!-- Interactive Split Slider Divider Line -->
+        <!-- Interactive Split Divider Line -->
         <div class="split-divider" id="split-divider" style="display: none;">
           <div class="split-handle">↔</div>
         </div>
 
-        <div class="viewport-controls">
-          <button class="icon-btn" id="btn-play-pause" title="Reproducir / Pausar">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-              <polygon points="6 4 18 12 6 20 6 4"></polygon>
-            </svg>
-          </button>
-          <span class="viewport-time-badge" id="viewport-timer">00:00:00</span>
-          <div class="spacer"></div>
-          <button class="icon-btn" id="btn-toggle-split" title="Comparativa A/B (Original vs Transparente)">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <!-- Viewport Overlay Controls -->
+        <div class="viewport-overlay-bar">
+          <button class="icon-btn" id="btn-toggle-split" title="Comparar Original vs Transparente (A/B)">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <line x1="12" y1="3" x2="12" y2="21"></line>
               <rect x="3" y="5" width="18" height="14" rx="2"></rect>
             </svg>
+            <span>Comparativa A/B</span>
           </button>
+          <div class="spacer"></div>
           <button class="icon-btn" id="btn-fullscreen" title="Pantalla Completa">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path>
             </svg>
           </button>
         </div>
       </div>
 
-      <!-- Live Telemetry HUD Bar -->
-      <div class="telemetry-bar" id="telemetry-container"></div>
+      <!-- Playback Timeline / Scrubber Bar -->
+      <div class="player-controls">
+        <button class="icon-btn play-btn" id="btn-play-pause" title="Reproducir / Pausar">
+          <svg id="play-icon" width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+            <polygon points="6 4 18 12 6 20 6 4"></polygon>
+          </svg>
+        </button>
+        <span class="time-display" id="time-current">00:00</span>
+        <input type="range" class="timeline-slider" id="video-scrubber" min="0" max="100" value="0" step="0.1">
+        <span class="time-display" id="time-duration">00:00</span>
+      </div>
 
-      <!-- Video Source Selectors -->
+      <!-- Source Selectors -->
       <div class="source-bar">
-        <span class="source-bar-title">Fuente de Entrada:</span>
-        <button class="btn btn-outline active" data-source="demo">
-          ⚡ Presentador Demo 60FPS
+        <span class="source-title">Fuente de Vídeo:</span>
+        <button class="btn btn-outline" id="btn-load-file">
+          📁 Subir Tu Vídeo (4K / 1080p)
         </button>
         <button class="btn btn-outline" data-source="webcam">
           📷 Cámara Web HD
         </button>
-        <button class="btn btn-outline" data-source="file">
-          📁 Subir Vídeo MP4/MOV
-        </button>
-        <button class="btn btn-outline" data-source="screen">
-          🖥️ Capturar Pantalla / Pestaña
+        <button class="btn btn-outline active" data-source="demo">
+          ⚡ Presentador Demo 60FPS
         </button>
         <input type="file" id="file-picker" accept="video/mp4,video/webm,video/ogg,video/quicktime" style="display: none;">
       </div>
+
+      <!-- Telemetry Bar -->
+      <div class="telemetry-bar" id="telemetry-container"></div>
     </section>
 
-    <!-- Right: Filters, Tuning & Background Controls -->
+    <!-- Right: Clear 3-Step Control Panel -->
     <aside class="control-panel">
-      <!-- Background Replacement Mode -->
-      <div class="panel-card">
-        <div class="card-header">
-          <h3>Fondo de Salida</h3>
-          <span class="badge-tech">ALPHA CHANNEL</span>
+      
+      <!-- PASO 1 -->
+      <div class="step-card">
+        <div class="step-header">
+          <span class="step-number">1</span>
+          <div>
+            <h3>¿Qué fondo quieres eliminar?</h3>
+            <p class="step-desc">Elige un método para detectar el fondo de tu vídeo</p>
+          </div>
         </div>
+
+        <div class="method-buttons">
+          <button class="method-btn active" id="btn-method-eyedropper">
+            <span class="method-icon">🪄</span>
+            <div class="method-text">
+              <strong>Cuentagotas Mágico</strong>
+              <span>Haz 1 clic en el fondo del vídeo</span>
+            </div>
+          </button>
+
+          <button class="method-btn" id="btn-method-autodetect">
+            <span class="method-icon">⚡</span>
+            <div class="method-text">
+              <strong>Auto-Detectar Fondo</strong>
+              <span>Analiza bordes y esquinas</span>
+            </div>
+          </button>
+
+          <button class="method-btn" id="btn-method-green">
+            <span class="method-icon">🟩</span>
+            <div class="method-text">
+              <strong>Croma Verde</strong>
+              <span>Fondos verdes clásicos</span>
+            </div>
+          </button>
+
+          <button class="method-btn" id="btn-method-blue">
+            <span class="method-icon">🟦</span>
+            <div class="method-text">
+              <strong>Croma Azul</strong>
+              <span>Fondos azules</span>
+            </div>
+          </button>
+        </div>
+
+        <!-- Color indicator -->
+        <div class="color-sample-box">
+          <span>Color que se está eliminando:</span>
+          <div class="color-preview-circle" id="color-preview-dot" style="background-color: #00d632;"></div>
+          <input type="color" id="key-color-input" value="#00d632" title="Elegir color manualmente">
+        </div>
+      </div>
+
+      <!-- PASO 2 -->
+      <div class="step-card">
+        <div class="step-header">
+          <span class="step-number">2</span>
+          <div>
+            <h3>Ajustar Transparencia</h3>
+            <p class="step-desc">Calibra el corte para que la persona quede nítida</p>
+          </div>
+        </div>
+
+        <div class="slider-group">
+          <div class="slider-label">
+            <span>Sensibilidad (¿Cuánto fondo borrar?)</span>
+            <strong id="val-threshold">30%</strong>
+          </div>
+          <input type="range" id="slider-threshold" min="0" max="100" value="30">
+        </div>
+
+        <div class="slider-group">
+          <div class="slider-label">
+            <span>Suavizado de Bordes (Feather)</span>
+            <strong id="val-feather">15%</strong>
+          </div>
+          <input type="range" id="slider-feather" min="0" max="100" value="15">
+        </div>
+
+        <!-- Advanced Toggle -->
+        <details class="advanced-details">
+          <summary>⚙️ Opciones avanzadas (Anti-halos Despill, Invertir)</summary>
+          <div class="advanced-content">
+            <div class="slider-group" style="margin-top: 10px;">
+              <div class="slider-label">
+                <span>Filtro Despill (Quitar reflejos en pelo/ropa)</span>
+                <strong id="val-despill">70%</strong>
+              </div>
+              <input type="range" id="slider-despill" min="0" max="100" value="70">
+            </div>
+
+            <div class="slider-group">
+              <div class="slider-label">
+                <span>Contracción / Expansión de Silueta</span>
+                <strong id="val-choke">0%</strong>
+              </div>
+              <input type="range" id="slider-choke" min="-100" max="100" value="0">
+            </div>
+
+            <label class="custom-checkbox" style="margin-top: 8px;">
+              <input type="checkbox" id="check-invert">
+              <span>Invertir Máscara (Mantener fondo y borrar sujeto)</span>
+            </label>
+          </div>
+        </details>
+      </div>
+
+      <!-- PASO 3 -->
+      <div class="step-card">
+        <div class="step-header">
+          <span class="step-number">3</span>
+          <div>
+            <h3>Fondo de Previsualización</h3>
+            <p class="step-desc">Comprueba cómo queda la transparencia</p>
+          </div>
+        </div>
+
         <div class="bg-mode-buttons">
           <button class="bg-btn active" data-bg="transparent">
-            🏁 Damero Alfa
+            🏁 Damero Transparente
           </button>
           <button class="bg-btn" data-bg="green">
-            🟩 Croma Verde
+            🟩 Croma Verde Puro
           </button>
           <button class="bg-btn" data-bg="cyberpunk">
             🌆 Estudio Virtual
           </button>
           <button class="bg-btn" data-bg="office">
-            🏢 Oficina Bokeh
+            🏢 Oficina con Desenfoque
           </button>
         </div>
       </div>
 
-      <!-- Matting Mode Selector -->
-      <div class="panel-card">
-        <div class="card-header">
-          <h3>Modo de Extracción</h3>
-        </div>
-        <div class="matting-mode-buttons">
-          <button class="mode-btn active" data-mode="chroma-green">
-            Verde (Green Screen)
-          </button>
-          <button class="mode-btn" data-mode="chroma-blue">
-            Azul (Blue Screen)
-          </button>
-          <button class="mode-btn" data-mode="chroma-custom">
-            Color Personalizado
-          </button>
-          <button class="mode-btn" data-mode="luma">
-            Luma (Brillo)
-          </button>
-        </div>
-        <div class="color-picker-row" id="color-picker-row" style="display: none; margin-top: 10px;">
-          <label>Tono a extraer:</label>
-          <input type="color" id="key-color-input" value="#00ff00">
-        </div>
-      </div>
-
-      <!-- Edge Tuning Sliders -->
-      <div class="panel-card">
-        <div class="card-header">
-          <h3>Perfeccionamiento de Borde</h3>
-          <span class="badge-tech">WGSL DESPILL</span>
-        </div>
-
-        <div class="slider-group">
-          <div class="slider-label">
-            <span>Umbral de Corte (Threshold)</span>
-            <span id="val-threshold">35%</span>
-          </div>
-          <input type="range" id="slider-threshold" min="0" max="100" value="35">
-        </div>
-
-        <div class="slider-group">
-          <div class="slider-label">
-            <span>Suavizado (Feather)</span>
-            <span id="val-feather">15%</span>
-          </div>
-          <input type="range" id="slider-feather" min="0" max="100" value="15">
-        </div>
-
-        <div class="slider-group">
-          <div class="slider-label">
-            <span>Filtro Despill (Anti-Halos)</span>
-            <span id="val-despill">75%</span>
-          </div>
-          <input type="range" id="slider-despill" min="0" max="100" value="75">
-        </div>
-
-        <div class="slider-group">
-          <div class="slider-label">
-            <span>Contracción / Expansión (Choke)</span>
-            <span id="val-choke">0%</span>
-          </div>
-          <input type="range" id="slider-choke" min="-100" max="100" value="0">
-        </div>
-
-        <div class="checkbox-row" style="margin-top: 12px;">
-          <label class="custom-checkbox">
-            <input type="checkbox" id="check-invert">
-            <span>Invertir Máscara (Conservar fondo)</span>
-          </label>
-        </div>
-      </div>
-
-      <!-- ProRes 4444 & Final Cut / DaVinci Guide -->
-      <div class="panel-card info-card">
-        <div class="card-header">
-          <h3>🎬 Flujo de Trabajo ProRes 4444</h3>
-        </div>
-        <p class="card-text">
-          Al pulsar <strong>"Grabar WebM Alfa"</strong>, se genera un archivo de vídeo que preserva el canal alfa nativo. Para integrarlo en <strong>Final Cut Pro</strong> o <strong>DaVinci Resolve</strong> como Apple ProRes 4444 (.mov transparente):
+      <!-- EXPORT SECTION -->
+      <div class="export-box">
+        <h3>🎬 Exportar Vídeo con Transparencia</h3>
+        <p class="export-desc">
+          Descarga tu vídeo con <strong>canal alfa real (WebM VP9)</strong> a máxima resolución.
         </p>
-        <pre class="code-box">ffmpeg -i video_transparente.webm -c:v prores_ks -profile:v 4444 -pix_fmt yuva444p10le salida.mov</pre>
+        <button class="btn btn-primary btn-block btn-lg" id="btn-export-main">
+          ⬇️ Grabar y Descargar Vídeo Transparente
+        </button>
+        <button class="btn btn-secondary btn-block" id="btn-export-snapshot" style="margin-top: 8px;">
+          📸 Descargar Fotograma Actual (.PNG)
+        </button>
+
+        <details class="prores-details">
+          <summary>💡 ¿Cómo usarlo en Final Cut Pro o DaVinci Resolve?</summary>
+          <div class="prores-box">
+            <p>Para convertir el WebM transparente en un archivo <strong>Apple ProRes 4444 (.mov)</strong> compatible con Final Cut Pro:</p>
+            <code>ffmpeg -i video_transparente.webm -c:v prores_ks -profile:v 4444 -pix_fmt yuva444p10le salida.mov</code>
+          </div>
+        </details>
       </div>
+
     </aside>
   </main>
 

@@ -6,7 +6,6 @@ struct VertexOutput {
 
 @vertex
 fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
-  // Two triangles covering the exact NDC viewport [-1, 1] x [-1, 1]
   var pos = array<vec2<f32>, 6>(
     vec2<f32>(-1.0, -1.0),
     vec2<f32>( 1.0, -1.0),
@@ -31,7 +30,7 @@ fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
   return out;
 }
 
-// Exactly 4 vec4s = 64 bytes with perfect 16-byte WGSL alignment
+// 4 vec4s = 64 bytes with 16-byte alignment
 struct Uniforms {
   tuning: vec4<f32>,       // x: threshold, y: feather, z: despill, w: choke
   keyColor: vec4<f32>,     // x: r, y: g, z: b, w: unused
@@ -43,7 +42,6 @@ struct Uniforms {
 @group(0) @binding(1) var videoSampler: sampler;
 @group(0) @binding(2) var<uniform> params: Uniforms;
 
-// Helper: RGB to YUV for color distance calculation
 fn rgb2yuv(rgb: vec3<f32>) -> vec3<f32> {
   let y = dot(rgb, vec3<f32>(0.299, 0.587, 0.114));
   let u = dot(rgb, vec3<f32>(-0.14713, -0.28886, 0.436));
@@ -51,39 +49,34 @@ fn rgb2yuv(rgb: vec3<f32>) -> vec3<f32> {
   return vec3<f32>(y, u, v);
 }
 
-// Procedural checkerboard pattern using valid u32 modulo
+// Checkerboard pattern for showing true transparency
 fn getCheckerboard(uv: vec2<f32>, res: vec2<f32>) -> vec4<f32> {
-  let tileSize = 16.0;
+  let tileSize = 20.0;
   let px = u32(max(0.0, uv.x * res.x / tileSize));
   let py = u32(max(0.0, uv.y * res.y / tileSize));
   let check = f32((px + py) % 2u);
-  let c1 = vec3<f32>(0.12, 0.14, 0.18);
-  let c2 = vec3<f32>(0.20, 0.22, 0.28);
+  let c1 = vec3<f32>(0.11, 0.13, 0.17);
+  let c2 = vec3<f32>(0.19, 0.22, 0.28);
   return vec4<f32>(mix(c1, c2, check), 1.0);
 }
 
-// Virtual Studio Backdrop (Cyberpunk ambient studio)
 fn getVirtualStudio(uv: vec2<f32>, time: f32) -> vec4<f32> {
   let horizon = 0.55;
   let ground = smoothstep(horizon - 0.02, horizon + 0.02, uv.y);
-  
   let sky = mix(vec3<f32>(0.08, 0.04, 0.18), vec3<f32>(0.25, 0.08, 0.35), uv.y * 1.5);
   let floorColor = mix(vec3<f32>(0.05, 0.06, 0.10), vec3<f32>(0.02, 0.02, 0.04), (uv.y - horizon) / max(1.0 - horizon, 0.01));
-  
   let gridX = abs(fract((uv.x - 0.5) / (max(uv.y - horizon, 0.01) * 2.0 + 0.1) * 8.0) - 0.5);
   let gridLine = smoothstep(0.45, 0.48, gridX) * (1.0 - ground);
   let gridGlow = vec3<f32>(0.0, 0.8, 1.0) * gridLine * 0.4;
-  
   let base = mix(sky, floorColor + gridGlow, ground);
   return vec4<f32>(base, 1.0);
 }
 
 @fragment
 fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
-  // Use textureSampleLevel with level 0.0 for uniform flow compliance
   var rawColor = textureSampleLevel(videoTexture, videoSampler, uv, 0.0);
 
-  // 1. Efecto Pitufo Simulator (Educational demo for OpenCV BGR bug)
+  // 1. Efecto Pitufo Simulator (OpenCV BGR bug demonstration)
   if (params.modes.z == 1u) {
     let tmpR = rawColor.r;
     rawColor.r = rawColor.b;
@@ -94,7 +87,6 @@ fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
   let splitPos = params.misc.y;
   let res = vec2<f32>(params.misc.z, params.misc.w);
   if (splitPos > 0.01 && uv.x < splitPos) {
-    // Divider line
     if (abs(uv.x - splitPos) < (2.0 / max(res.x, 1.0))) {
       return vec4<f32>(1.0, 1.0, 1.0, 1.0);
     }
@@ -113,45 +105,54 @@ fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
   let backgroundMode = params.modes.y;
   let invertMask = params.modes.w;
 
-  // 3. Compute Alpha Matte based on Mode
+  // 3. Compute Alpha Matte based on mode
   if (mattingMode == 0u) {
-    // Green Chroma Keying
+    // Mode 0: Green Screen
     let greenDiff = rawColor.g - max(rawColor.r, rawColor.b);
-    let t = thresh * 0.4 + 0.02;
-    let f = max(feather * 0.3, 0.005);
+    let t = thresh * 0.5 + 0.02;
+    let f = max(feather * 0.35, 0.005);
     alpha = 1.0 - smoothstep(t, t + f, greenDiff);
 
-    // Despill Filter: clamp green to max(red, blue)
     if (rawColor.g > max(rawColor.r, rawColor.b) && despill > 0.0) {
-      let targetG = mix(rawColor.g, max(rawColor.r, rawColor.b), despill);
-      processedColor.g = targetG;
+      processedColor.g = mix(rawColor.g, max(rawColor.r, rawColor.b), despill);
     }
   } else if (mattingMode == 1u) {
-    // Blue Chroma Keying
+    // Mode 1: Blue Screen
     let blueDiff = rawColor.b - max(rawColor.r, rawColor.g);
-    let t = thresh * 0.4 + 0.02;
-    let f = max(feather * 0.3, 0.005);
+    let t = thresh * 0.5 + 0.02;
+    let f = max(feather * 0.35, 0.005);
     alpha = 1.0 - smoothstep(t, t + f, blueDiff);
 
-    // Despill Filter: clamp blue to max(red, green)
     if (rawColor.b > max(rawColor.r, rawColor.g) && despill > 0.0) {
-      let targetB = mix(rawColor.b, max(rawColor.r, rawColor.g), despill);
-      processedColor.b = targetB;
+      processedColor.b = mix(rawColor.b, max(rawColor.r, rawColor.g), despill);
     }
   } else if (mattingMode == 2u) {
-    // Custom Color Distance Keying (YUV space)
+    // Mode 2: Custom Color Keying (Works with ANY color, wall, curtain, or studio backdrop)
+    let rgbDist = distance(rawColor.rgb, keyColor);
     let yuvSample = rgb2yuv(rawColor.rgb);
     let yuvKey = rgb2yuv(keyColor);
-    let dist = distance(yuvSample.yz, yuvKey.yz);
-    let t = thresh * 0.5 + 0.01;
-    let f = max(feather * 0.25, 0.005);
+    let chromaDist = distance(yuvSample.yz, yuvKey.yz);
+    let lumaDist = abs(yuvSample.x - yuvKey.x);
+
+    // High sensitivity to chrominance for vivid backgrounds, high sensitivity to luminance for neutral/grey/white walls
+    let keySat = length(yuvKey.yz);
+    let dist = mix(rgbDist, chromaDist * 1.6 + lumaDist * 0.5, clamp(keySat * 5.0, 0.0, 1.0));
+
+    let t = thresh * 0.75 + 0.01;
+    let f = max(feather * 0.35, 0.005);
     alpha = smoothstep(t, t + f, dist);
+
+    // Despill: neutralize keyColor spill
+    if (dist < t + f * 1.5 && despill > 0.0) {
+      let spillFactor = (1.0 - smoothstep(t * 0.4, t + f, dist)) * despill;
+      processedColor = vec4<f32>(mix(rawColor.rgb, vec3<f32>(yuvSample.x), spillFactor * 0.4), rawColor.a);
+    }
   } else if (mattingMode == 4u) {
-    // Luma Keying
+    // Mode 4: Luma Keying (high brightness or dark cutout)
     let lum = dot(rawColor.rgb, vec3<f32>(0.299, 0.587, 0.114));
     alpha = smoothstep(thresh - feather * 0.5, thresh + feather * 0.5, lum);
   } else {
-    // Procedural / Default
+    // Mode 5 / Procedural
     alpha = rawColor.a;
   }
 
@@ -170,19 +171,19 @@ fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
   var finalColor: vec4<f32>;
 
   if (backgroundMode == 0u) {
-    // Checkerboard Transparency visualization
+    // Checkerboard Transparency
     let checker = getCheckerboard(uv, res);
     finalColor = vec4<f32>(mix(checker.rgb, processedColor.rgb, alpha), 1.0);
   } else if (backgroundMode == 1u) {
-    // Solid Green Screen (#00FF00)
+    // Solid Green Screen
     let greenScreen = vec3<f32>(0.0, 1.0, 0.0);
     finalColor = vec4<f32>(mix(greenScreen, processedColor.rgb, alpha), 1.0);
   } else if (backgroundMode == 2u) {
-    // Virtual Studio (Cyberpunk ambient)
+    // Virtual Studio
     let studio = getVirtualStudio(uv, params.misc.x);
     finalColor = vec4<f32>(mix(studio.rgb, processedColor.rgb, alpha), 1.0);
   } else if (backgroundMode == 3u) {
-    // Studio Office / Warm bokeh
+    // Studio Office Bokeh
     let warmBg = mix(vec3<f32>(0.12, 0.16, 0.24), vec3<f32>(0.28, 0.22, 0.18), uv.x);
     finalColor = vec4<f32>(mix(warmBg, processedColor.rgb, alpha), 1.0);
   } else {

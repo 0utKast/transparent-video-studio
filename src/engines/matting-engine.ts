@@ -10,18 +10,18 @@ export class MattingEngine {
   private proceduralCtx: CanvasRenderingContext2D;
 
   private params: MattingParams = {
-    threshold: 0.35,
+    threshold: 0.30,
     feather: 0.15,
-    despill: 0.75,
+    despill: 0.70,
     choke: 0.0,
-    keyColor: [0, 255, 0],
+    keyColor: [0, 230, 50],
     simulateSmurfBug: false,
     invertMask: false,
   };
 
   private mattingMode: MattingMode = 'chroma-green';
   private backgroundMode: BackgroundMode = 'transparent';
-  private splitPosition = 0.0; // 0.0 = full processed, 0.5 = 50% comparison
+  private splitPosition = 0.0;
 
   // Telemetry
   private frameCount = 0;
@@ -34,10 +34,9 @@ export class MattingEngine {
     this.canvas = canvas;
     this.webgpuPipeline = new WebGPUMattingPipeline(canvas);
 
-    // Offscreen canvas for procedural demo generator
     this.proceduralCanvas = document.createElement('canvas');
-    this.proceduralCanvas.width = canvas.width;
-    this.proceduralCanvas.height = canvas.height;
+    this.proceduralCanvas.width = 1280;
+    this.proceduralCanvas.height = 720;
     this.proceduralCtx = this.proceduralCanvas.getContext('2d')!;
   }
 
@@ -61,8 +60,16 @@ export class MattingEngine {
     this.mattingMode = mode;
   }
 
+  public getMattingMode(): MattingMode {
+    return this.mattingMode;
+  }
+
   public setBackgroundMode(mode: BackgroundMode): void {
     this.backgroundMode = mode;
+  }
+
+  public getBackgroundMode(): BackgroundMode {
+    return this.backgroundMode;
   }
 
   public setSplitPosition(pos: number): void {
@@ -74,36 +81,83 @@ export class MattingEngine {
   }
 
   /**
-   * Generates a dynamic 3D-styled animated presenter in front of a green screen
-   * Allows instant testing of background removal and edge matting without loading external video!
+   * Samples the color at normalized UV (0..1) from the source video frame
    */
+  public sampleColorAtUV(u: number, v: number, source: CanvasImageSource): [number, number, number] {
+    const w = source instanceof HTMLVideoElement ? (source.videoWidth || 1280) : ((source as any).width || 1280);
+    const h = source instanceof HTMLVideoElement ? (source.videoHeight || 720) : ((source as any).height || 720);
+
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = 1;
+    tempCanvas.height = 1;
+    const ctx = tempCanvas.getContext('2d', { willReadFrequently: true })!;
+
+    const sampleX = Math.floor(Math.max(0, Math.min(1, u)) * (w - 1));
+    const sampleY = Math.floor(Math.max(0, Math.min(1, v)) * (h - 1));
+
+    ctx.drawImage(source, sampleX, sampleY, 1, 1, 0, 0, 1, 1);
+    const pixel = ctx.getImageData(0, 0, 1, 1).data;
+    return [pixel[0], pixel[1], pixel[2]];
+  }
+
+  /**
+   * Automatically samples the outer corners to find the dominant background color
+   */
+  public autoDetectBackgroundColor(source: CanvasImageSource): [number, number, number] {
+    const w = source instanceof HTMLVideoElement ? (source.videoWidth || 1280) : ((source as any).width || 1280);
+    const h = source instanceof HTMLVideoElement ? (source.videoHeight || 720) : ((source as any).height || 720);
+
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = 32;
+    tempCanvas.height = 32;
+    const ctx = tempCanvas.getContext('2d', { willReadFrequently: true })!;
+    ctx.drawImage(source, 0, 0, 32, 32);
+    const imgData = ctx.getImageData(0, 0, 32, 32).data;
+
+    // Sample top corners and bottom corners
+    const sampleIndices = [
+      0,                  // top-left (0,0)
+      31 * 4,             // top-right (31,0)
+      (31 * 32) * 4,      // bottom-left (0,31)
+      (31 * 32 + 31) * 4  // bottom-right (31,31)
+    ];
+
+    let r = 0, g = 0, b = 0;
+    for (const idx of sampleIndices) {
+      r += imgData[idx];
+      g += imgData[idx + 1];
+      b += imgData[idx + 2];
+    }
+
+    return [Math.round(r / 4), Math.round(g / 4), Math.round(b / 4)];
+  }
+
   public renderProceduralDemoFrame(time: number): HTMLCanvasElement {
     const ctx = this.proceduralCtx;
     const w = this.proceduralCanvas.width;
     const h = this.proceduralCanvas.height;
 
-    // 1. Studio Green Screen Background (#00E640)
+    // Green studio background
     ctx.fillStyle = '#00d632';
     ctx.fillRect(0, 0, w, h);
 
-    // Subtle studio lighting gradient on the green screen
     const bgGlow = ctx.createRadialGradient(w * 0.5, h * 0.4, 20, w * 0.5, h * 0.4, w * 0.6);
     bgGlow.addColorStop(0, 'rgba(0, 255, 70, 0.35)');
     bgGlow.addColorStop(1, 'rgba(0, 180, 40, 0.0)');
     ctx.fillStyle = bgGlow;
     ctx.fillRect(0, 0, w, h);
 
-    // 2. Animated Presenter / Character
+    // Presenter
     const cx = w * 0.5 + Math.sin(time * 0.8) * 25;
     const cy = h * 0.55 + Math.cos(time * 1.2) * 12;
 
-    // Shadow on green floor
+    // Shadow
     ctx.beginPath();
     ctx.ellipse(cx, h * 0.88, 120, 25, 0, 0, Math.PI * 2);
     ctx.fillStyle = 'rgba(0, 80, 20, 0.45)';
     ctx.fill();
 
-    // Body / Torso (Warm studio jacket - Navy Blue & Orange)
+    // Body
     ctx.beginPath();
     ctx.ellipse(cx, cy + 120, 110, 140, 0, 0, Math.PI * 2);
     const bodyGrad = ctx.createLinearGradient(cx - 100, cy, cx + 100, cy + 200);
@@ -113,7 +167,7 @@ export class MattingEngine {
     ctx.fillStyle = bodyGrad;
     ctx.fill();
 
-    // Collar shirt (Orange accent)
+    // Collar
     ctx.beginPath();
     ctx.moveTo(cx - 30, cy + 30);
     ctx.lineTo(cx, cy + 75);
@@ -121,13 +175,13 @@ export class MattingEngine {
     ctx.fillStyle = '#ea580c';
     ctx.fill();
 
-    // Neck (Warm natural skin tone)
+    // Neck
     ctx.beginPath();
     ctx.rect(cx - 24, cy - 10, 48, 55);
     ctx.fillStyle = '#e0a98b';
     ctx.fill();
 
-    // Head / Face
+    // Head
     ctx.beginPath();
     ctx.ellipse(cx, cy - 60, 65, 80, 0, 0, Math.PI * 2);
     const skinGrad = ctx.createRadialGradient(cx - 15, cy - 75, 10, cx, cy - 60, 85);
@@ -137,13 +191,12 @@ export class MattingEngine {
     ctx.fillStyle = skinGrad;
     ctx.fill();
 
-    // Hair (Detailed hair fringe for edge feather testing)
+    // Hair
     ctx.beginPath();
     ctx.ellipse(cx, cy - 105, 72, 45, 0, 0, Math.PI);
     ctx.fillStyle = '#3b2219';
     ctx.fill();
 
-    // Individual hair tufts / fine strands (great for testing despill & feathering!)
     for (let i = -5; i <= 5; i++) {
       ctx.beginPath();
       ctx.moveTo(cx + i * 12, cy - 110);
@@ -161,7 +214,7 @@ export class MattingEngine {
     ctx.ellipse(cx + 22, cy - 62, 10, 7 * eyeBlink, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    ctx.fillStyle = '#2563eb'; // Blue irises
+    ctx.fillStyle = '#2563eb';
     ctx.beginPath();
     ctx.arc(cx - 22, cy - 62, 4 * eyeBlink, 0, Math.PI * 2);
     ctx.arc(cx + 22, cy - 62, 4 * eyeBlink, 0, Math.PI * 2);
@@ -207,7 +260,6 @@ export class MattingEngine {
       this.alphaCoverage = res.alphaCoverage;
     }
 
-    // Telemetry update
     this.frameCount++;
     const now = performance.now();
     this.lastFrameDurationMs = now - startTime;
