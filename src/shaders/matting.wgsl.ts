@@ -1,23 +1,4 @@
-export const MATTING_SHADER_WGSL = `
-struct Uniforms {
-  threshold: f32,
-  feather: f32,
-  despill: f32,
-  choke: f32,
-  keyColor: vec3<f32>,
-  mattingMode: u32,
-  backgroundMode: u32,
-  simulateSmurf: u32,
-  invertMask: u32,
-  time: f32,
-  splitPosition: f32,
-  resolution: vec2<f32>,
-};
-
-@group(0) @binding(0) var videoTexture: texture_2d<f32>;
-@group(0) @binding(1) var videoSampler: sampler;
-@group(0) @binding(2) var<uniform> params: Uniforms;
-
+export const MATTING_SHADER_WGSL = /* wgsl */ `
 struct VertexOutput {
   @builtin(position) position: vec4<f32>,
   @location(0) uv: vec2<f32>,
@@ -25,25 +6,44 @@ struct VertexOutput {
 
 @vertex
 fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
-  // Generates a full-screen triangle: (0,0), (2,0), (0,2) in UV space
-  var pos = array<vec2<f32>, 3>(
+  // Two triangles covering the exact NDC viewport [-1, 1] x [-1, 1]
+  var pos = array<vec2<f32>, 6>(
     vec2<f32>(-1.0, -1.0),
-    vec2<f32>( 3.0, -1.0),
-    vec2<f32>(-1.0,  3.0)
-  );
-  var uvs = array<vec2<f32>, 3>(
-    vec2<f32>(0.0, 1.0),
-    vec2<f32>(2.0, 1.0),
-    vec2<f32>(0.0, -1.0)
+    vec2<f32>( 1.0, -1.0),
+    vec2<f32>(-1.0,  1.0),
+    vec2<f32>(-1.0,  1.0),
+    vec2<f32>( 1.0, -1.0),
+    vec2<f32>( 1.0,  1.0)
   );
 
-  var output: VertexOutput;
-  output.position = vec4<f32>(pos[vertexIndex], 0.0, 1.0);
-  output.uv = uvs[vertexIndex];
-  return output;
+  var uvs = array<vec2<f32>, 6>(
+    vec2<f32>(0.0, 1.0),
+    vec2<f32>(1.0, 1.0),
+    vec2<f32>(0.0, 0.0),
+    vec2<f32>(0.0, 0.0),
+    vec2<f32>(1.0, 1.0),
+    vec2<f32>(1.0, 0.0)
+  );
+
+  var out: VertexOutput;
+  out.position = vec4<f32>(pos[vertexIndex], 0.0, 1.0);
+  out.uv = uvs[vertexIndex];
+  return out;
 }
 
-// Helper: RGB to YUV for perceptual distance
+// Exactly 4 vec4s = 64 bytes with perfect 16-byte WGSL alignment
+struct Uniforms {
+  tuning: vec4<f32>,       // x: threshold, y: feather, z: despill, w: choke
+  keyColor: vec4<f32>,     // x: r, y: g, z: b, w: unused
+  modes: vec4<u32>,        // x: mattingMode, y: backgroundMode, z: simulateSmurf, w: invertMask
+  misc: vec4<f32>,         // x: time, y: splitPosition, z: resolution.x, w: resolution.y
+};
+
+@group(0) @binding(0) var videoTexture: texture_2d<f32>;
+@group(0) @binding(1) var videoSampler: sampler;
+@group(0) @binding(2) var<uniform> params: Uniforms;
+
+// Helper: RGB to YUV for color distance calculation
 fn rgb2yuv(rgb: vec3<f32>) -> vec3<f32> {
   let y = dot(rgb, vec3<f32>(0.299, 0.587, 0.114));
   let u = dot(rgb, vec3<f32>(-0.14713, -0.28886, 0.436));
@@ -51,13 +51,14 @@ fn rgb2yuv(rgb: vec3<f32>) -> vec3<f32> {
   return vec3<f32>(y, u, v);
 }
 
-// Procedural checkerboard pattern for displaying transparency
+// Procedural checkerboard pattern using valid u32 modulo
 fn getCheckerboard(uv: vec2<f32>, res: vec2<f32>) -> vec4<f32> {
   let tileSize = 16.0;
-  let pixelCoords = uv * res;
-  let check = (floor(pixelCoords.x / tileSize) + floor(pixelCoords.y / tileSize)) % 2.0;
-  let c1 = vec3<f32>(0.12, 0.13, 0.16);
-  let c2 = vec3<f32>(0.20, 0.22, 0.26);
+  let px = u32(max(0.0, uv.x * res.x / tileSize));
+  let py = u32(max(0.0, uv.y * res.y / tileSize));
+  let check = f32((px + py) % 2u);
+  let c1 = vec3<f32>(0.12, 0.14, 0.18);
+  let c2 = vec3<f32>(0.20, 0.22, 0.28);
   return vec4<f32>(mix(c1, c2, check), 1.0);
 }
 
@@ -66,11 +67,9 @@ fn getVirtualStudio(uv: vec2<f32>, time: f32) -> vec4<f32> {
   let horizon = 0.55;
   let ground = smoothstep(horizon - 0.02, horizon + 0.02, uv.y);
   
-  // Cyberpunk neon gradient background
   let sky = mix(vec3<f32>(0.08, 0.04, 0.18), vec3<f32>(0.25, 0.08, 0.35), uv.y * 1.5);
-  let floorColor = mix(vec3<f32>(0.05, 0.06, 0.10), vec3<f32>(0.02, 0.02, 0.04), (uv.y - horizon) / (1.0 - horizon));
+  let floorColor = mix(vec3<f32>(0.05, 0.06, 0.10), vec3<f32>(0.02, 0.02, 0.04), (uv.y - horizon) / max(1.0 - horizon, 0.01));
   
-  // Ambient neon grid lines on the floor
   let gridX = abs(fract((uv.x - 0.5) / (max(uv.y - horizon, 0.01) * 2.0 + 0.1) * 8.0) - 0.5);
   let gridLine = smoothstep(0.45, 0.48, gridX) * (1.0 - ground);
   let gridGlow = vec3<f32>(0.0, 0.8, 1.0) * gridLine * 0.4;
@@ -81,23 +80,22 @@ fn getVirtualStudio(uv: vec2<f32>, time: f32) -> vec4<f32> {
 
 @fragment
 fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
-  // Flip Y for standard video texture coordinates if needed
-  let sampleUV = vec2<f32>(uv.x, 1.0 - uv.y);
-  var rawColor = textureSample(videoTexture, videoSampler, sampleUV);
+  // Use textureSampleLevel with level 0.0 for uniform flow compliance
+  var rawColor = textureSampleLevel(videoTexture, videoSampler, uv, 0.0);
 
-  // 1. Efecto Pitufo Simulator (Educational demo)
-  // When active, swaps Red and Blue channels to demonstrate the OpenCV BGR bug
-  if (params.simulateSmurf == 1u) {
+  // 1. Efecto Pitufo Simulator (Educational demo for OpenCV BGR bug)
+  if (params.modes.z == 1u) {
     let tmpR = rawColor.r;
     rawColor.r = rawColor.b;
     rawColor.b = tmpR;
   }
 
   // 2. Interactive A/B split screen
-  // Left side shows raw video, Right side shows processed transparent result
-  if (params.splitPosition > 0.01 && uv.x < params.splitPosition) {
-    // Thin divider line
-    if (abs(uv.x - params.splitPosition) < (2.0 / params.resolution.x)) {
+  let splitPos = params.misc.y;
+  let res = vec2<f32>(params.misc.z, params.misc.w);
+  if (splitPos > 0.01 && uv.x < splitPos) {
+    // Divider line
+    if (abs(uv.x - splitPos) < (2.0 / max(res.x, 1.0))) {
       return vec4<f32>(1.0, 1.0, 1.0, 1.0);
     }
     return rawColor;
@@ -106,54 +104,63 @@ fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
   var processedColor = rawColor;
   var alpha = 1.0;
 
+  let thresh = params.tuning.x;
+  let feather = params.tuning.y;
+  let despill = params.tuning.z;
+  let choke = params.tuning.w;
+  let keyColor = params.keyColor.xyz;
+  let mattingMode = params.modes.x;
+  let backgroundMode = params.modes.y;
+  let invertMask = params.modes.w;
+
   // 3. Compute Alpha Matte based on Mode
-  if (params.mattingMode == 0u) {
-    // Mode 0: Green Chroma Keying
+  if (mattingMode == 0u) {
+    // Green Chroma Keying
     let greenDiff = rawColor.g - max(rawColor.r, rawColor.b);
-    let thresh = params.threshold * 0.4 + 0.02;
-    let feath = max(params.feather * 0.3, 0.005);
-    alpha = 1.0 - smoothstep(thresh, thresh + feath, greenDiff);
+    let t = thresh * 0.4 + 0.02;
+    let f = max(feather * 0.3, 0.005);
+    alpha = 1.0 - smoothstep(t, t + f, greenDiff);
 
     // Despill Filter: clamp green to max(red, blue)
-    if (rawColor.g > max(rawColor.r, rawColor.b) && params.despill > 0.0) {
-      let targetG = mix(rawColor.g, max(rawColor.r, rawColor.b), params.despill);
+    if (rawColor.g > max(rawColor.r, rawColor.b) && despill > 0.0) {
+      let targetG = mix(rawColor.g, max(rawColor.r, rawColor.b), despill);
       processedColor.g = targetG;
     }
-  } else if (params.mattingMode == 1u) {
-    // Mode 1: Blue Chroma Keying
+  } else if (mattingMode == 1u) {
+    // Blue Chroma Keying
     let blueDiff = rawColor.b - max(rawColor.r, rawColor.g);
-    let thresh = params.threshold * 0.4 + 0.02;
-    let feath = max(params.feather * 0.3, 0.005);
-    alpha = 1.0 - smoothstep(thresh, thresh + feath, blueDiff);
+    let t = thresh * 0.4 + 0.02;
+    let f = max(feather * 0.3, 0.005);
+    alpha = 1.0 - smoothstep(t, t + f, blueDiff);
 
     // Despill Filter: clamp blue to max(red, green)
-    if (rawColor.b > max(rawColor.r, rawColor.g) && params.despill > 0.0) {
-      let targetB = mix(rawColor.b, max(rawColor.r, rawColor.g), params.despill);
+    if (rawColor.b > max(rawColor.r, rawColor.g) && despill > 0.0) {
+      let targetB = mix(rawColor.b, max(rawColor.r, rawColor.g), despill);
       processedColor.b = targetB;
     }
-  } else if (params.mattingMode == 2u) {
-    // Mode 2: Custom Color Distance Keying (YUV space)
+  } else if (mattingMode == 2u) {
+    // Custom Color Distance Keying (YUV space)
     let yuvSample = rgb2yuv(rawColor.rgb);
-    let yuvKey = rgb2yuv(params.keyColor);
+    let yuvKey = rgb2yuv(keyColor);
     let dist = distance(yuvSample.yz, yuvKey.yz);
-    let thresh = params.threshold * 0.5 + 0.01;
-    let feath = max(params.feather * 0.25, 0.005);
-    alpha = smoothstep(thresh, thresh + feath, dist);
-  } else if (params.mattingMode == 4u) {
-    // Mode 4: Luma Keying (high/low luminance cut)
+    let t = thresh * 0.5 + 0.01;
+    let f = max(feather * 0.25, 0.005);
+    alpha = smoothstep(t, t + f, dist);
+  } else if (mattingMode == 4u) {
+    // Luma Keying
     let lum = dot(rawColor.rgb, vec3<f32>(0.299, 0.587, 0.114));
-    alpha = smoothstep(params.threshold - params.feather * 0.5, params.threshold + params.feather * 0.5, lum);
+    alpha = smoothstep(thresh - feather * 0.5, thresh + feather * 0.5, lum);
   } else {
-    // Mode 3 / 5: Semantic & Procedural (use raw alpha or subtle edge mask)
+    // Procedural / Default
     alpha = rawColor.a;
   }
 
   // Choke / Expand adjustment
-  if (params.choke != 0.0) {
-    alpha = clamp(alpha + params.choke * 0.25, 0.0, 1.0);
+  if (choke != 0.0) {
+    alpha = clamp(alpha + choke * 0.25, 0.0, 1.0);
   }
 
-  if (params.invertMask == 1u) {
+  if (invertMask == 1u) {
     alpha = 1.0 - alpha;
   }
 
@@ -162,24 +169,24 @@ fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
   // 4. Background Compositing
   var finalColor: vec4<f32>;
 
-  if (params.backgroundMode == 0u) {
+  if (backgroundMode == 0u) {
     // Checkerboard Transparency visualization
-    let checker = getCheckerboard(uv, params.resolution);
+    let checker = getCheckerboard(uv, res);
     finalColor = vec4<f32>(mix(checker.rgb, processedColor.rgb, alpha), 1.0);
-  } else if (params.backgroundMode == 1u) {
-    // Solid Green Screen (#00FF00) for traditional pipelines
+  } else if (backgroundMode == 1u) {
+    // Solid Green Screen (#00FF00)
     let greenScreen = vec3<f32>(0.0, 1.0, 0.0);
     finalColor = vec4<f32>(mix(greenScreen, processedColor.rgb, alpha), 1.0);
-  } else if (params.backgroundMode == 2u) {
+  } else if (backgroundMode == 2u) {
     // Virtual Studio (Cyberpunk ambient)
-    let studio = getVirtualStudio(uv, params.time);
+    let studio = getVirtualStudio(uv, params.misc.x);
     finalColor = vec4<f32>(mix(studio.rgb, processedColor.rgb, alpha), 1.0);
-  } else if (params.backgroundMode == 3u) {
-    // Studio Office / Warm bokeh backdrop
+  } else if (backgroundMode == 3u) {
+    // Studio Office / Warm bokeh
     let warmBg = mix(vec3<f32>(0.12, 0.16, 0.24), vec3<f32>(0.28, 0.22, 0.18), uv.x);
     finalColor = vec4<f32>(mix(warmBg, processedColor.rgb, alpha), 1.0);
   } else {
-    // Raw Transparent RGBA (Direct Alpha preservation for WebM encoding / PNG export)
+    // Raw Transparent RGBA
     finalColor = vec4<f32>(processedColor.rgb * alpha, alpha);
   }
 
