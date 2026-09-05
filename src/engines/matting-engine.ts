@@ -37,13 +37,13 @@ export class MattingEngine {
     this.proceduralCanvas = document.createElement('canvas');
     this.proceduralCanvas.width = 1280;
     this.proceduralCanvas.height = 720;
-    this.proceduralCtx = this.proceduralCanvas.getContext('2d')!;
+    this.proceduralCtx = this.proceduralCanvas.getContext('2d', { willReadFrequently: true })!;
   }
 
   public async init(): Promise<boolean> {
     const ok = await this.webgpuPipeline.init();
     if (!ok) {
-      this.fallbackCtx = this.canvas.getContext('2d');
+      this.fallbackCtx = this.canvas.getContext('2d', { willReadFrequently: true });
     }
     return ok;
   }
